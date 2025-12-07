@@ -33,6 +33,7 @@ int gCmdCount = 0;
 Bool gCmdHasInit = FALSE;
 
 CmdInfo** gCmdCommands = NULL;
+static CmdInfo* gCmdStorage = NULL;
 
 unsigned char* gCmdListEnd = NULL;
 unsigned char* gCmdListBegin = NULL;
@@ -102,7 +103,9 @@ int cmd_init() {
 	int i = 0;
 	gCmdCount = 0;
 	gCmdHasInit = TRUE;
-	gCmdCommands = (CmdInfo**) (LOADADDR + 0x01800000);
+	unsigned char* region_base = (unsigned char*) (LOADADDR + 0x01800000);
+	gCmdCommands = (CmdInfo**) region_base;
+	gCmdStorage = (CmdInfo*) (region_base + (MAX_COMMANDS * sizeof(CmdInfo*)));
 
 	gCmdListBegin = find_cmd_list_begin();
 	if(gCmdListBegin == NULL) {
@@ -168,9 +171,12 @@ void cmd_add(char* name, CmdFunction handler, char* description) {
 		puts("Maximum Commands Reached\n");
 		return;
 	}
+	if(gCmdCommands == NULL || gCmdStorage == NULL) {
+		puts("Command storage not initialized\n");
+		return;
+	}
 
-	//command = (CmdInfo*) malloc(sizeof(CmdInfo));
-	command = (CmdInfo*) (LOADADDR + 0x01800000) + (gCmdCount * sizeof(CmdInfo));
+	command = gCmdStorage + gCmdCount;
 	command->name = name;
 	command->handler = handler;
 	command->description = description;
