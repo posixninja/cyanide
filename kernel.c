@@ -38,6 +38,8 @@ char** gKernelPhyMem = SELF_KERNEL_PHYMEM;
 int(*kernel_atv_load)(char* boot_path, char** output) = NULL;
 int(*kernel_load)(void* input, int max_size, char** output) = NULL;
 
+static void kernel_usage(void);
+
 void* find_kernel_bootargs() {
 	return find_string(TARGET_BASEADDR, TARGET_BASEADDR, 0x40000, "rd=md0");
 }
@@ -70,46 +72,109 @@ int kernel_init() {
 int kernel_cmd(int argc, CmdArg* argv) {
 	char* action = NULL;
 	unsigned int size = 0;
-	unsigned int* compressed = 0;
 	unsigned char* address = NULL;
 	if(argc < 2) {
-		puts("usage: kernel <load/patch/boot> [options]\n");
-		puts("  load <address> <size>         \t\tload filesystem kernel to address\n");
-		puts("  patch <address> <size>        \t\tpatches kernel at address in memory\n");
-		puts("  bootargs <string>             \t\treplace current bootargs with another\n");
-		puts("  boot                          \t\tboot a loaded kernel\n");
+		kernel_usage();
 		return 0;
 	}
 
 	action = argv[1].string;
-	size = argv[3].uinteger;
-	address = (unsigned char*) argv[2].uinteger;
 	if(!strcmp(action, "load")) {
-		if(strstr((char*) (IBOOT_BASEADDR + 0x200), "k66ap")) {
-			printf("Loading AppleTV kernelcache from %s\n", KERNEL_PATH);
-			kernel_atv_load(KERNEL_PATH, &gKernelAddr);
-		} else {
-			printf("Loading kernelcache from 0x%x\n", address);
-			kernel_load((void*) address, size, &gKernelAddr);
+		if(argc != 4) {
+			kernel_usage();
+			return -1;
 		}
-		printf("kernelcache prepped at %p with phymem %p\n", gKernelAddr, *gKernelPhyMem);
+		address = (unsigned char*) argv[2].uinteger;
+		size = argv[3].uinteger;
+		if(address == NULL || size == 0) {
+			puts("Invalid source address or size for kernel load\n");
+			return -1;
+		}
+
+		if(strstr((char*) (IBOOT_BASEADDR + 0x200), "k66ap")) {
+			if(kernel_atv_load == NULL) {
+				puts("kernel_atv_load not available for AppleTV\n");
+				return -1;
+			}
+			printf("Loading AppleTV kernelcache from %s\n", KERNEL_PATH);
+			if(kernel_atv_load(KERNEL_PATH, &gKernelAddr) != 0) {
+				puts("Failed to load AppleTV kernelcache\n");
+				return -1;
+			}
+		} else {
+			if(kernel_load == NULL) {
+				puts("kernel_load not available\n");
+				return -1;
+			}
+			printf("Loading kernelcache from 0x%x\n", address);
+			if(kernel_load((void*) address, size, &gKernelAddr) != 0) {
+				puts("Failed to load kernelcache\n");
+				return -1;
+			}
+		}
+		void* phy_mem = (gKernelPhyMem != NULL) ? *gKernelPhyMem : NULL;
+		printf("kernelcache prepped at %p with phymem %p\n", gKernelAddr, phy_mem);
 	}
 	else if(!strcmp(action, "patch")) {
-		printf("patching kernel...\n");
-		if(gKernelAddr) {
+		if(argc != 2 && argc != 4) {
+			kernel_usage();
+			return -1;
+		}
+
+		if(argc == 4) {
+			address = (unsigned char*) argv[2].uinteger;
+			size = argv[3].uinteger;
+			if(address == NULL || size == 0) {
+				puts("Invalid address or size for kernel patch\n");
+				return -1;
+			}
+			printf("patching kernel at %p (size 0x%x)...\n", address, size);
+			patch_kernel(address, size);
+		} else {
+			if(gKernelAddr == NULL) {
+				puts("No kernelcache loaded to patch\n");
+				return -1;
+			}
+			printf("patching kernel at loaded address %p...\n", gKernelAddr);
 			patch_kernel(gKernelAddr, 0xC00000);
 		}
 	}
 	else if(!strcmp(action, "bootargs")) {
+		if(argc < 3) {
+			puts("usage: kernel bootargs <string>\n");
+			return -1;
+		}
 		kernel_bootargs(argc, argv);
 	}
 	else if(!strcmp(action, "boot")) {
-		if(gKernelAddr) {
-			printf("booting kernel...\n");
-			jump_to(3, gKernelAddr, *gKernelPhyMem);
+		if(gKernelAddr == NULL) {
+			puts("Load and patch a kernel before booting\n");
+			return -1;
 		}
+		if(gKernelPhyMem == NULL || *gKernelPhyMem == NULL) {
+			puts("Kernel physical memory pointer not set\n");
+			return -1;
+		}
+		if(jump_to == NULL) {
+			puts("jump_to function not available\n");
+			return -1;
+		}
+		printf("booting kernel...\n");
+		jump_to(3, gKernelAddr, *gKernelPhyMem);
+	}
+	else {
+		kernel_usage();
 	}
 	return 0;
+}
+
+static void kernel_usage(void) {
+	puts("usage: kernel <load/patch/bootargs/boot> [options]\n");
+	puts("  load <address> <size>         \tload filesystem kernel to address\n");
+	puts("  patch [address] [size]        \tpatch kernel at address in memory\n");
+	puts("                                 \t(defaults to loaded kernelcache)\n");
+	puts("  bootargs <string>             \treplace current bootargs with another\n");
+	puts("  boot                          \tboot a loaded kernel\n");
 }
 
 int kernel_bootargs(int argc, CmdArg* argv) {
